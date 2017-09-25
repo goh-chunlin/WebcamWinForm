@@ -52,9 +52,19 @@ namespace WebCamWinForm
 
         private void btnRecord_Click(object sender, EventArgs e)
         {
-            workerRecordingVideo.RunWorkerAsync();
+            if (ddlVideoDevices.SelectedIndex < 0 || ddlAudioDevices.SelectedIndex < 0 || ddlVideoDuration.SelectedIndex < 0 ||
+                string.IsNullOrWhiteSpace(txtAzureStorageConnectionString.Text))
+            {
+                string warningMessage = "Please make sure all inputs are filled in properly.";
+                MessageBox.Show(warningMessage);
+                lblStatus.Text = warningMessage;
+            }
+            else
+            {
+                workerRecordingVideo.RunWorkerAsync();
 
-            UpdateUserInputsEnability(false);
+                UpdateUserInputsEnability(false);
+            }
         }
 
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
@@ -110,32 +120,25 @@ namespace WebCamWinForm
                     }));
                 }
 
-                if (selectedVideoDeviceIndex < 0 || selectedAudioDeviceIndex < 0)
-                {
-                    worker.ReportProgress(100, "No video/audio source selected.");
-                }
-                else
-                {
-                    _webcam.ConnectSelectedVideoAndAudioDevices(
+                _webcam.ConnectSelectedVideoAndAudioDevices(
                        new RecordingDeviceInfo { DeviceOptionIndex = selectedVideoDeviceIndex, DeviceName = selectedVideoDeviceName },
                        new RecordingDeviceInfo { DeviceOptionIndex = selectedAudioDeviceIndex, DeviceName = selectedAudioDeviceName });
 
-                    _webcam.StopJob();
+                _webcam.StopJob();
 
-                    worker.ReportProgress(25, "Creating job...");
+                worker.ReportProgress(25, "Creating job...");
 
-                    _webcam.StartJob();
+                _webcam.StartJob();
 
-                    worker.ReportProgress(40, "Set device source.");
+                worker.ReportProgress(40, "Set device source.");
 
-                    _webcam.GenerateOutputFile();
+                _webcam.GenerateOutputFile();
 
-                    worker.ReportProgress(50, "Created a media file.");
+                worker.ReportProgress(50, "Created a media file.");
 
-                    _webcam.StartEncoding();
+                _webcam.StartEncoding();
 
-                    worker.ReportProgress(60, "Starting to record...");
-                }
+                worker.ReportProgress(60, "Starting to record...");
             }
             catch (Exception ex)
             {
