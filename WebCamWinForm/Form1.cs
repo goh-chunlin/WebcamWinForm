@@ -116,31 +116,40 @@ namespace WebCamWinForm2020
         {
             string outputPath = $"output_{DateTime.Now.ToString("yyyy_MM_dd_HH_mm_ss")}.mp4";
 
-            FFMpeg.ReplaceAudio("video.mp4", "sound.wav", outputPath, true);
-
-            lblStatus.Text = $"Recording saved to local disk with the file name {outputPath}.";
-
-            string azureStorageConnectionString = txtAzureStorageConnectionString.Text;
-            if (!string.IsNullOrWhiteSpace(azureStorageConnectionString)) 
+            try
             {
-                try
-                {
-                    BlobServiceClient blobServiceClient = new BlobServiceClient(azureStorageConnectionString);
-                    BlobContainerClient containerClient = blobServiceClient.GetBlobContainerClient("webcam-videos");
-                    BlobClient blobClient = containerClient.GetBlobClient(outputPath);
+                FFMpeg.ReplaceAudio("video.mp4", "sound.wav", outputPath, true);
 
-                    using FileStream uploadFileStream = File.OpenRead(outputPath);
-                    await blobClient.UploadAsync(uploadFileStream, true);
-                    uploadFileStream.Close();
+                lblStatus.Text = $"Recording saved to local disk with the file name {outputPath}.";
 
-                    lblStatus.Text = $"Recording saved to both local disk and Azure Blob Storage with the file name {outputPath}.";
-                }
-                catch (Exception ex)
+                string azureStorageConnectionString = txtAzureStorageConnectionString.Text;
+                if (!string.IsNullOrWhiteSpace(azureStorageConnectionString))
                 {
-                    lblStatus.Text = $"Recording saved to both local disk with the file name {outputPath} but cannot be saved on Azure Blob Storage.";
-                    MessageBox.Show(ex.Message, "Error on saving to Azure Blob Storage", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    try
+                    {
+                        BlobServiceClient blobServiceClient = new BlobServiceClient(azureStorageConnectionString);
+                        BlobContainerClient containerClient = blobServiceClient.GetBlobContainerClient("webcam-videos");
+                        BlobClient blobClient = containerClient.GetBlobClient(outputPath);
+
+                        using FileStream uploadFileStream = File.OpenRead(outputPath);
+                        await blobClient.UploadAsync(uploadFileStream, true);
+                        uploadFileStream.Close();
+
+                        lblStatus.Text = $"Recording saved to both local disk and Azure Blob Storage with the file name {outputPath}.";
+                    }
+                    catch (Exception ex)
+                    {
+                        lblStatus.Text = $"Recording saved to both local disk with the file name {outputPath} but cannot be saved on Azure Blob Storage.";
+                        MessageBox.Show(ex.Message, "Error on Saving to Azure Blob Storage", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
                 }
-            }            
+            }
+            catch (Exception ex) 
+            {
+                lblStatus.Text = "Recording cannot be saved.";
+
+                MessageBox.Show($"Recording cannot be saved because {ex.Message}", "Error on Recording Saving", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void DisposeCameraResources() 
