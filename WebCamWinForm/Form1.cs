@@ -1,17 +1,30 @@
-﻿using Microsoft.Expression.Encoder.Devices;
-using Microsoft.Expression.Encoder.Live;
+﻿using Azure.Storage.Blobs;
+using BasicAudio;
+using DirectShowLib;
+using FFMpegCore;
+using OpenCvSharp;
+using OpenCvSharp.Extensions;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
+using System.Drawing;
+using System.IO;
+using System.Threading.Tasks;
 using System.Windows.Forms;
-using WebCamWinForm.Models;
-using WebCamWinForm.Services;
 
-namespace WebCamWinForm
+namespace WebCamWinForm2020
 {
     public partial class Form1 : Form
     {
-        private Webcam _webcam;
+        bool isCameraRunning = false;
+        bool isMicrophoneJustStarted = false;
+        VideoCapture capture;
+        VideoWriter outputVideo;
+        Recording audioRecorder;
+
+        Mat frame;
+        Bitmap imageAlternate;
+        Bitmap image;
+        bool isUsingImageAlternate = false;
 
         Dictionary<int, Tuple<string, int>> availableVideoDurationOptions = new Dictionary<int, Tuple<string, int>>();
 
@@ -24,184 +37,195 @@ namespace WebCamWinForm
         {
             lblStatus.Text = "";
 
-            foreach (EncoderDevice edv in EncoderDevices.FindDevices(EncoderDeviceType.Video))
+            var videoDevices = new List<DsDevice>(DsDevice.GetDevicesOfCat(FilterCategory.VideoInputDevice));
+            foreach (var device in videoDevices)
             {
-                ddlVideoDevices.Items.Add(edv.Name);
+                ddlVideoDevices.Items.Add(device.Name);
             }
-
-            foreach (EncoderDevice edv in EncoderDevices.FindDevices(EncoderDeviceType.Audio))
-            {
-                ddlAudioDevices.Items.Add(edv.Name);
-            }
-
-            availableVideoDurationOptions.Add(0, new Tuple<string, int>("10 seconds", 10));
-            availableVideoDurationOptions.Add(1, new Tuple<string, int>("15 seconds", 15));
-            availableVideoDurationOptions.Add(2, new Tuple<string, int>("30 seconds", 30));
-            availableVideoDurationOptions.Add(3, new Tuple<string, int>("60 seconds", 60));
-            availableVideoDurationOptions.Add(4, new Tuple<string, int>("3 minutes", 180));
-
-            foreach (var option in availableVideoDurationOptions)
-            {
-                ddlVideoDuration.Items.Add(option.Value.Item1);
-            }
-
-            ddlVideoDuration.SelectedIndex = 0;
-
-            _webcam = new Webcam();
         }
 
-        private void btnRecord_Click(object sender, EventArgs e)
+        private async void btnRecord_Click(object sender, EventArgs e)
         {
-            if (ddlVideoDevices.SelectedIndex < 0 || ddlAudioDevices.SelectedIndex < 0 || ddlVideoDuration.SelectedIndex < 0 ||
-                string.IsNullOrWhiteSpace(txtAzureStorageConnectionString.Text))
+            if (!isCameraRunning)
             {
-                string warningMessage = "Please make sure all inputs are filled in properly.";
-                MessageBox.Show(warningMessage);
-                lblStatus.Text = warningMessage;
+                lblStatus.Text = "Starting recording...";
+
+                StartCamera();
+                StartMicrophone();
+
+                recordingTimer.Enabled = true;
+                recordingTimer.Start();
+
+                lblStatus.Text = "Recording...";
             }
             else
             {
-                workerRecordingVideo.RunWorkerAsync();
+                StopCamera();
+                StopMicrophone();
 
-                UpdateUserInputsEnability(false);
+                lblStatus.Text = "Recording ended.";
+
+                await OutputRecordingAsync();
             }
         }
 
-        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        private void StartCamera() 
         {
-            _webcam.StopJob();
+            DisposeCameraResources();
+
+            isCameraRunning = true;
+
+            btnRecord.Text = "Stop";
+
+            capture = new VideoCapture(1);
+            capture.Open(1);
+
+            outputVideo = new VideoWriter("video.mp4", FourCC.IYUV, 29, new OpenCvSharp.Size(640, 480));
         }
 
-        private void webcamRecordingTimer_Tick(object sender, EventArgs e)
+        private void StopCamera() 
         {
-            try
-            {
-                webcamRecordingTimer.Enabled = false;
-                webcamRecordingTimer.Stop();
+            isCameraRunning = false;
 
-                _webcam.StopEncoding();
+            btnRecord.Text = "Start";
 
-                _webcam.StopJob();
+            recordingTimer.Stop();
+            recordingTimer.Enabled = false;
 
-                workerStoringVideoAsFile.RunWorkerAsync();
-            }
-            catch (Exception ex)
-            {
-                lblStatus.Text = ex.Message;
-            }
+            DisposeCaptureResources();
         }
 
-        private void workerRecordingVideo_DoWork(object sender, DoWorkEventArgs e)
+        private void StartMicrophone() 
         {
-            var worker = sender as BackgroundWorker;
+            audioRecorder = new Recording();
+            audioRecorder.Filename = "sound.wav";
+            isMicrophoneJustStarted = true;
+        }
 
-            try
+        private void StopMicrophone()
+        {
+            audioRecorder.StopRecording();
+        }
+
+        private async Task OutputRecordingAsync() 
+        {
+            string outputPath = $"output_{DateTime.Now.ToString("yyyy_MM_dd_HH_mm_ss")}.mp4";
+
+            FFMpeg.ReplaceAudio("video.mp4", "sound.wav", outputPath, true);
+
+            lblStatus.Text = $"Recording saved to local disk with the file name {outputPath}.";
+
+            string azureStorageConnectionString = txtAzureStorageConnectionString.Text;
+            if (!string.IsNullOrWhiteSpace(azureStorageConnectionString)) 
             {
-                worker.ReportProgress(0, "Getting physical selected device...");
-
-                int selectedVideoDeviceIndex = -1;
-                int selectedAudioDeviceIndex = -1;
-                string selectedVideoDeviceName = null;
-                string selectedAudioDeviceName = null;
-
-                if (ddlVideoDevices.InvokeRequired)
+                try
                 {
-                    ddlVideoDevices.Invoke(new MethodInvoker(delegate {
-                        selectedVideoDeviceIndex = ddlVideoDevices.SelectedIndex;
-                        selectedVideoDeviceName = ddlVideoDevices.SelectedItem.ToString();
-                    }));
+                    BlobServiceClient blobServiceClient = new BlobServiceClient(azureStorageConnectionString);
+                    BlobContainerClient containerClient = blobServiceClient.GetBlobContainerClient("webcam-videos");
+                    BlobClient blobClient = containerClient.GetBlobClient(outputPath);
+
+                    using FileStream uploadFileStream = File.OpenRead(outputPath);
+                    await blobClient.UploadAsync(uploadFileStream, true);
+                    uploadFileStream.Close();
+
+                    lblStatus.Text = $"Recording saved to both local disk and Azure Blob Storage with the file name {outputPath}.";
+                }
+                catch (Exception ex)
+                {
+                    lblStatus.Text = $"Recording saved to both local disk with the file name {outputPath} but cannot be saved on Azure Blob Storage.";
+                    MessageBox.Show(ex.Message, "Error on saving to Azure Blob Storage", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }            
+        }
+
+        private void DisposeCameraResources() 
+        {
+            if (frame != null)
+            {
+                frame.Dispose();
+            }
+
+            if (image != null)
+            {
+                image.Dispose();
+            }
+
+            if (imageAlternate != null)
+            {
+                imageAlternate.Dispose();
+            }
+        }
+
+        private void DisposeCaptureResources() 
+        {
+            if (capture != null)
+            {
+                capture.Release();
+                capture.Dispose();
+            }
+
+            if (outputVideo != null)
+            {
+                outputVideo.Release();
+                outputVideo.Dispose();
+            }
+        }
+
+        private void recordingTimer_Tick(object sender, EventArgs e)
+        {
+            if (capture.IsOpened())
+            {
+                try
+                {
+                    frame = new Mat();
+                    capture.Read(frame);
+                    if (frame != null)
+                    {
+                        if (imageAlternate == null)
+                        {
+                            isUsingImageAlternate = true;
+                            imageAlternate = BitmapConverter.ToBitmap(frame);
+                        }
+                        else if (image == null)
+                        {
+                            isUsingImageAlternate = false;
+                            image = BitmapConverter.ToBitmap(frame);
+                        }
+
+                        pictureBox1.Image = isUsingImageAlternate ? imageAlternate : image;
+
+                        outputVideo.Write(frame);
+                    }
+                }
+                catch (Exception) 
+                {
+                    pictureBox1.Image = null;
+                }
+                finally
+                {
+                    if (frame != null)
+                    {
+                        frame.Dispose();
+                    }
+
+                    if (isUsingImageAlternate && image != null)
+                    {
+                        image.Dispose();
+                        image = null;
+                    }
+                    else if (!isUsingImageAlternate && imageAlternate != null)
+                    {
+                        imageAlternate.Dispose();
+                        imageAlternate = null;
+                    }
                 }
 
-                if (ddlAudioDevices.InvokeRequired)
+                if (isMicrophoneJustStarted)
                 {
-                    ddlAudioDevices.Invoke(new MethodInvoker(delegate {
-                        selectedAudioDeviceIndex = ddlAudioDevices.SelectedIndex;
-                        selectedAudioDeviceName = ddlAudioDevices.SelectedItem.ToString();
-                    }));
+                    audioRecorder.StartRecording();
+                    isMicrophoneJustStarted = false;
                 }
-
-                _webcam.ConnectSelectedVideoAndAudioDevices(
-                       new RecordingDeviceInfo { DeviceOptionIndex = selectedVideoDeviceIndex, DeviceName = selectedVideoDeviceName },
-                       new RecordingDeviceInfo { DeviceOptionIndex = selectedAudioDeviceIndex, DeviceName = selectedAudioDeviceName });
-
-                _webcam.StopJob();
-
-                worker.ReportProgress(25, "Creating job...");
-
-                _webcam.StartJob();
-
-                worker.ReportProgress(40, "Set device source.");
-
-                _webcam.GenerateOutputFile();
-
-                worker.ReportProgress(50, "Created a media file.");
-
-                _webcam.StartEncoding();
-
-                worker.ReportProgress(60, "Starting to record...");
             }
-            catch (Exception ex)
-            {
-                worker.ReportProgress(100, ex.Message);
-            }
-        }
-
-        private void workerRecordingVideo_ProgressChanged(object sender, ProgressChangedEventArgs e)
-        {
-            progressBarStatus.Visible = true;
-            progressBarStatus.Value = e.ProgressPercentage;
-
-            lblStatus.Text = (string)e.UserState;
-        }
-
-        private void workerRecordingVideo_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
-        {
-            webcamRecordingTimer.Enabled = true;
-            webcamRecordingTimer.Interval = availableVideoDurationOptions[ddlVideoDuration.SelectedIndex].Item2 * 1000;
-            webcamRecordingTimer.Start();
-        }
-
-        private void workerStoringVideoAsFile_DoWork(object sender, DoWorkEventArgs e)
-        {
-            var worker = sender as BackgroundWorker;
-
-            try
-            {
-                worker.ReportProgress(80, "Start uploading video...");
-
-                AzureStorage.UploadFile(txtAzureStorageConnectionString.Text, 
-                    _webcam.RecordingOutputFileInfo.FileName, FileProcessor.ConvertFileToBytes(_webcam.RecordingOutputFileInfo.FilePath));
-
-                worker.ReportProgress(100, $"Success!");
-            }
-            catch (Exception ex)
-            {
-                worker.ReportProgress(100, ex.Message);
-            }
-        }
-
-        private void workerStoringVideoAsFile_ProgressChanged(object sender, ProgressChangedEventArgs e)
-        {
-            progressBarStatus.Visible = true;
-            progressBarStatus.Value = e.ProgressPercentage;
-
-            lblStatus.Text = (string)e.UserState;
-        }
-
-        private void workerStoringVideoAsFile_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
-        {
-            progressBarStatus.Visible = false;
-
-            UpdateUserInputsEnability(true);
-        }
-
-        private void UpdateUserInputsEnability(bool isSetToEnabled)
-        {
-            ddlVideoDevices.Enabled = 
-                ddlAudioDevices.Enabled = 
-                ddlVideoDuration.Enabled = 
-                txtAzureStorageConnectionString.Enabled = 
-                btnRecord.Enabled = isSetToEnabled;
         }
     }
 }
