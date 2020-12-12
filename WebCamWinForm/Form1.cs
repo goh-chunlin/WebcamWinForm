@@ -26,8 +26,6 @@ namespace WebCamWinForm2020
         Bitmap image;
         bool isUsingImageAlternate = false;
 
-        Dictionary<int, Tuple<string, int>> availableVideoDurationOptions = new Dictionary<int, Tuple<string, int>>();
-
         public Form1()
         {
             InitializeComponent();
@@ -46,6 +44,12 @@ namespace WebCamWinForm2020
 
         private async void btnRecord_Click(object sender, EventArgs e)
         {
+            if (ddlVideoDevices.SelectedIndex < 0) 
+            {
+                MessageBox.Show("Please choose a video device as the Video Source.", "Video Source Not Defined", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
             if (!isCameraRunning)
             {
                 lblStatus.Text = "Starting recording...";
@@ -77,10 +81,11 @@ namespace WebCamWinForm2020
 
             btnRecord.Text = "Stop";
 
-            capture = new VideoCapture(1);
-            capture.Open(1);
+            int deviceIndex = ddlVideoDevices.SelectedIndex;
+            capture = new VideoCapture(deviceIndex);
+            capture.Open(deviceIndex);
 
-            outputVideo = new VideoWriter("video.mp4", FourCC.IYUV, 29, new OpenCvSharp.Size(640, 480));
+            outputVideo = new VideoWriter("video.mp4", FourCC.AVC, 29, new OpenCvSharp.Size(640, 480));
         }
 
         private void StopCamera() 
