@@ -4,6 +4,7 @@
     <img src="https://gclstorage.blob.core.windows.net/images/WebcamWinForm-banner.png" />
 </div>
 
+![.NET 5 Build](https://github.com/goh-chunlin/WebcamWinForm/workflows/.NET%205/badge.svg?branch=master)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Donate](https://img.shields.io/badge/$-donate-ff69b4.svg)](https://www.buymeacoffee.com/chunlin)
 
